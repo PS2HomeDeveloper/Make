@@ -152,7 +152,6 @@ jobs:
         uses: nttld/setup-ndk@v1
         with:
           ndk-version: r26d
-          local-cache: true
 
       - name: Configure (cross-compile for Android)
         env:
@@ -160,10 +159,20 @@ jobs:
         run: |
           TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
           echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+
+          echo "--- محتويات مجلد الأدوات (للتشخيص) ---"
+          ls -la "$TOOLCHAIN/bin" | grep -i "clang\|llvm-ar\|llvm-ranlib\|llvm-strip" || true
+
           export CC="$TOOLCHAIN/bin/${{ matrix.clang_triplet }}"
           export AR="$TOOLCHAIN/bin/llvm-ar"
           export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
           export STRIP="$TOOLCHAIN/bin/llvm-strip"
+
+          if [ ! -x "$TOOLCHAIN/bin/clang" ]; then
+            echo "::error::clang غير موجود في $TOOLCHAIN/bin -- تثبيت NDK غير مكتمل"
+            exit 1
+          fi
+
           "$CC" --version
           chmod +x ./configure ./build-aux/*
           ./configure \
