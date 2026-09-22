@@ -1,0 +1,192 @@
+name: Build GNU Make (Linux / Windows / Android)
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches: [ "main", "master" ]
+
+env:
+  # نفس فلاجات configure تُستخدم لكل الأهداف: تعطيل الترجمة، rpath، ودعم guile
+  # (guile غير متوفر عند البناء المتقاطع لويندوز/أندرويد)
+  COMMON_CONFIGURE_FLAGS: --disable-nls --disable-rpath --without-guile
+
+jobs:
+  # ============================================================
+  # لينكس: x86_64 و x86 (32-بت) عبر gcc / gcc-multilib
+  # ============================================================
+  linux:
+    name: linux-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            gcc_flags: "-m64"
+            out_name: make_linux_x86_64
+          - arch: x86
+            gcc_flags: "-m32"
+            out_name: make_linux_x86
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+          if [ "${{ matrix.arch }}" = "x86" ]; then
+            sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
+          fi
+
+      - name: Configure
+        run: |
+          ./configure \
+            $COMMON_CONFIGURE_FLAGS \
+            CC="gcc ${{ matrix.gcc_flags }}" \
+            CFLAGS="${{ matrix.gcc_flags }} -O2" \
+            LDFLAGS="${{ matrix.gcc_flags }}"
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Verify binary architecture
+        run: |
+          file ./make
+          ./make --version
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp ./make "dist/${{ matrix.out_name }}"
+          chmod +x "dist/${{ matrix.out_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out_name }}
+          path: dist/${{ matrix.out_name }}
+          retention-days: 30
+          if-no-files-found: error
+
+  # ============================================================
+  # ويندوز: x86_64 و x86 (32-بت) عبر الترجمة المتقاطعة mingw-w64
+  # ============================================================
+  windows:
+    name: windows-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            host_triplet: x86_64-w64-mingw32
+            out_name: make_windows_x86_64.exe
+          - arch: x86
+            host_triplet: i686-w64-mingw32
+            out_name: make_windows_x86.exe
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install mingw-w64 toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+
+      - name: Configure (cross-compile for Windows)
+        run: |
+          ./configure \
+            --host=${{ matrix.host_triplet }} \
+            $COMMON_CONFIGURE_FLAGS \
+            CC="${{ matrix.host_triplet }}-gcc" \
+            CFLAGS="-O2"
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Verify output
+        run: |
+          ls -la make.exe
+          file make.exe
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp ./make.exe "dist/${{ matrix.out_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out_name }}
+          path: dist/${{ matrix.out_name }}
+          retention-days: 30
+          if-no-files-found: error
+
+  # ============================================================
+  # أندرويد: arm64-v8a (64-بت) و armeabi-v7a (32-بت) عبر Android NDK
+  # ============================================================
+  android:
+    name: android-${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64-v8a
+            host_triplet: aarch64-linux-android
+            clang_triplet: aarch64-linux-android21-clang
+            out_name: make_android_arm64-v8a
+          - arch: armeabi-v7a
+            host_triplet: arm-linux-androideabi
+            clang_triplet: armv7a-linux-androideabi21-clang
+            out_name: make_android_armeabi-v7a
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        id: setup-ndk
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r26d
+          local-cache: true
+
+      - name: Configure (cross-compile for Android)
+        env:
+          ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
+        run: |
+          TOOLCHAIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64"
+          echo "TOOLCHAIN=$TOOLCHAIN" >> "$GITHUB_ENV"
+          export CC="$TOOLCHAIN/bin/${{ matrix.clang_triplet }}"
+          export AR="$TOOLCHAIN/bin/llvm-ar"
+          export RANLIB="$TOOLCHAIN/bin/llvm-ranlib"
+          export STRIP="$TOOLCHAIN/bin/llvm-strip"
+          "$CC" --version
+          ./configure \
+            --host=${{ matrix.host_triplet }} \
+            $COMMON_CONFIGURE_FLAGS \
+            CC="$CC" AR="$AR" RANLIB="$RANLIB" \
+            CFLAGS="-O2"
+
+      - name: Build
+        run: make -j"$(nproc)"
+
+      - name: Strip & verify
+        run: |
+          "$TOOLCHAIN/bin/llvm-strip" ./make
+          file ./make
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp ./make "dist/${{ matrix.out_name }}"
+          chmod +x "dist/${{ matrix.out_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out_name }}
+          path: dist/${{ matrix.out_name }}
+          retention-days: 30
+          if-no-files-found: error
