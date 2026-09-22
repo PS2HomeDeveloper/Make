@@ -12,7 +12,7 @@ env:
 
 jobs:
   # ============================================================
-  # لينكس: x86_64 و x86 (32-بت) عبر gcc / gcc-multilib
+  # لينكس: x86_64 / x86 (32-بت) عبر gcc، و arm64 عبر ترجمة متقاطعة
   # ============================================================
   linux:
     name: linux-${{ matrix.arch }}
@@ -22,11 +22,26 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            gcc_flags: "-m64"
+            cc: "gcc -m64"
+            cflags: "-m64 -O2"
+            ldflags: "-m64"
+            host: ""
+            apt_pkg: ""
             out_name: make_linux_x86_64
           - arch: x86
-            gcc_flags: "-m32"
+            cc: "gcc -m32"
+            cflags: "-m32 -O2"
+            ldflags: "-m32"
+            host: ""
+            apt_pkg: "gcc-multilib g++-multilib libc6-dev-i386"
             out_name: make_linux_x86
+          - arch: arm64
+            cc: "aarch64-linux-gnu-gcc"
+            cflags: "-O2"
+            ldflags: ""
+            host: "aarch64-linux-gnu"
+            apt_pkg: "gcc-aarch64-linux-gnu"
+            out_name: make_linux_arm64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -35,18 +50,23 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y build-essential
-          if [ "${{ matrix.arch }}" = "x86" ]; then
-            sudo apt-get install -y gcc-multilib g++-multilib libc6-dev-i386
+          if [ -n "${{ matrix.apt_pkg }}" ]; then
+            sudo apt-get install -y ${{ matrix.apt_pkg }}
           fi
 
       - name: Configure
         run: |
           chmod +x ./configure ./build-aux/*
+          HOST_FLAG=""
+          if [ -n "${{ matrix.host }}" ]; then
+            HOST_FLAG="--host=${{ matrix.host }}"
+          fi
           ./configure \
+            $HOST_FLAG \
             $COMMON_CONFIGURE_FLAGS \
-            CC="gcc ${{ matrix.gcc_flags }}" \
-            CFLAGS="${{ matrix.gcc_flags }} -O2" \
-            LDFLAGS="${{ matrix.gcc_flags }}"
+            CC="${{ matrix.cc }}" \
+            CFLAGS="${{ matrix.cflags }}" \
+            LDFLAGS="${{ matrix.ldflags }}"
 
       - name: Build
         run: make -j"$(nproc)"
@@ -54,7 +74,10 @@ jobs:
       - name: Verify binary architecture
         run: |
           file ./make
-          ./make --version
+          # لا يمكن تشغيل ثنائي arm64 على عامل x86_64، نكتفي بفحص "file" له
+          if [ "${{ matrix.arch }}" != "arm64" ]; then
+            ./make --version
+          fi
 
       - name: Prepare artifact
         run: |
