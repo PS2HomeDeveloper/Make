@@ -1,14 +1,12 @@
-name: Build GNU Make (Linux / Windows / Android)
+name: Build GNU Make (Linux / Windows / macOS / Android / iOS)
 
+# تشغيل يدوي فقط من تبويب Actions -> Run workflow
 on:
   workflow_dispatch: {}
-  push:
-    branches: [ "main", "master" ]
 
 env:
-  # نفس فلاجات configure تُستخدم لكل الأهداف: تعطيل الترجمة، rpath، ودعم guile
-  # (guile غير متوفر عند البناء المتقاطع لويندوز/أندرويد)
   COMMON_CONFIGURE_FLAGS: --disable-nls --disable-rpath --without-guile
+  LLVM_MINGW_VERSION: "20260616"
 
 jobs:
   # ============================================================
@@ -74,7 +72,6 @@ jobs:
       - name: Verify binary architecture
         run: |
           file ./make
-          # لا يمكن تشغيل ثنائي arm64 على عامل x86_64، نكتفي بفحص "file" له
           if [ "${{ matrix.arch }}" != "arm64" ]; then
             ./make --version
           fi
@@ -92,9 +89,10 @@ jobs:
           path: dist/${{ matrix.out_name }}
           retention-days: 30
           if-no-files-found: error
+          compression-level: 0
 
   # ============================================================
-  # ويندوز: x86_64 و x86 (32-بت) عبر الترجمة المتقاطعة mingw-w64
+  # ويندوز: x86_64/x86 عبر mingw-w64 (gcc)، وarm64 عبر llvm-mingw (clang)
   # ============================================================
   windows:
     name: windows-${{ matrix.arch }}
@@ -104,27 +102,48 @@ jobs:
       matrix:
         include:
           - arch: x86_64
-            host_triplet: x86_64-w64-mingw32
+            host: x86_64-w64-mingw32
+            toolchain: mingw-gcc
+            cc: x86_64-w64-mingw32-gcc
             out_name: make_windows_x86_64.exe
           - arch: x86
-            host_triplet: i686-w64-mingw32
+            host: i686-w64-mingw32
+            toolchain: mingw-gcc
+            cc: i686-w64-mingw32-gcc
             out_name: make_windows_x86.exe
+          - arch: arm64
+            host: aarch64-w64-mingw32
+            toolchain: llvm-mingw
+            cc: aarch64-w64-mingw32-clang
+            out_name: make_windows_arm64.exe
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install mingw-w64 toolchain
+      - name: Install mingw-w64 (gcc) toolchain
+        if: matrix.toolchain == 'mingw-gcc'
         run: |
           sudo apt-get update
           sudo apt-get install -y mingw-w64
 
+      - name: Install llvm-mingw toolchain (for arm64)
+        if: matrix.toolchain == 'llvm-mingw'
+        run: |
+          URL="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz"
+          curl -L -o llvm-mingw.tar.xz "$URL"
+          sudo mkdir -p /opt/llvm-mingw
+          sudo tar -xJf llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
+          echo "/opt/llvm-mingw/bin" >> "$GITHUB_PATH"
+
       - name: Configure (cross-compile for Windows)
         run: |
           chmod +x ./configure ./build-aux/*
+          command -v "${{ matrix.cc }}"
+          "${{ matrix.cc }}" --version
           ./configure \
-            --host=${{ matrix.host_triplet }} \
+            --host=${{ matrix.host }} \
             $COMMON_CONFIGURE_FLAGS \
-            CC="${{ matrix.host_triplet }}-gcc" \
+            CC="${{ matrix.cc }}" \
             CFLAGS="-O2"
 
       - name: Build
@@ -147,9 +166,10 @@ jobs:
           path: dist/${{ matrix.out_name }}
           retention-days: 30
           if-no-files-found: error
+          compression-level: 0
 
   # ============================================================
-  # أندرويد: arm64-v8a (64-بت) و armeabi-v7a (32-بت) عبر Android NDK
+  # أندرويد: arm64-v8a / armeabi-v7a / x86_64 / x86 عبر Android NDK
   # ============================================================
   android:
     name: android-${{ matrix.arch }}
@@ -159,13 +179,21 @@ jobs:
       matrix:
         include:
           - arch: arm64-v8a
-            host_triplet: aarch64-linux-android
+            host: aarch64-linux-android
             clang_triplet: aarch64-linux-android21-clang
             out_name: make_android_arm64-v8a
           - arch: armeabi-v7a
-            host_triplet: arm-linux-androideabi
+            host: arm-linux-androideabi
             clang_triplet: armv7a-linux-androideabi21-clang
             out_name: make_android_armeabi-v7a
+          - arch: x86_64
+            host: x86_64-linux-android
+            clang_triplet: x86_64-linux-android21-clang
+            out_name: make_android_x86_64
+          - arch: x86
+            host: i686-linux-android
+            clang_triplet: i686-linux-android21-clang
+            out_name: make_android_x86
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -199,7 +227,7 @@ jobs:
           "$CC" --version
           chmod +x ./configure ./build-aux/*
           ./configure \
-            --host=${{ matrix.host_triplet }} \
+            --host=${{ matrix.host }} \
             $COMMON_CONFIGURE_FLAGS \
             CC="$CC" AR="$AR" RANLIB="$RANLIB" \
             CFLAGS="-O2"
@@ -225,3 +253,106 @@ jobs:
           path: dist/${{ matrix.out_name }}
           retention-days: 30
           if-no-files-found: error
+          compression-level: 0
+
+  # ============================================================
+  # macOS: arm64 (Apple Silicon) و x86_64 (Intel)
+  # ============================================================
+  macos:
+    name: macos-${{ matrix.arch }}
+    runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            cc: "clang -arch arm64"
+            out_name: make_macos_arm64
+            can_run: true
+          - arch: x86_64
+            cc: "clang -arch x86_64"
+            out_name: make_macos_x86_64
+            can_run: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          chmod +x ./configure ./build-aux/*
+          ./configure \
+            $COMMON_CONFIGURE_FLAGS \
+            CC="${{ matrix.cc }}" \
+            CFLAGS="-O2"
+
+      - name: Build
+        run: make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Verify binary architecture
+        run: |
+          file ./make
+          if [ "${{ matrix.can_run }}" = "true" ]; then
+            ./make --version
+          fi
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp ./make "dist/${{ matrix.out_name }}"
+          chmod +x "dist/${{ matrix.out_name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out_name }}
+          path: dist/${{ matrix.out_name }}
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
+
+  # ============================================================
+  # iOS: arm64 (الأجهزة الحقيقية فقط)
+  # ملاحظة: هذا بناء متقاطع فقط. تطبيقات المتجر لا يُسمح لها بتشغيل
+  # ثنائي منفصل وقت التشغيل بسبب صرامة sandbox الخاص بـ iOS.
+  # ============================================================
+  ios:
+    name: ios-arm64
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure (cross-compile for iOS device)
+        run: |
+          chmod +x ./configure ./build-aux/*
+          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
+          IOS_AR="$(xcrun --sdk iphoneos -f ar)"
+          IOS_RANLIB="$(xcrun --sdk iphoneos -f ranlib)"
+          CC="clang -arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=14.0"
+          echo "CC value: $CC"
+          ./configure \
+            --host=aarch64-apple-ios \
+            $COMMON_CONFIGURE_FLAGS \
+            CC="$CC" AR="$IOS_AR" RANLIB="$IOS_RANLIB" \
+            CFLAGS="-O2"
+
+      - name: Build
+        run: make -j"$(sysctl -n hw.ncpu)"
+
+      - name: Verify binary architecture
+        run: file ./make
+
+      - name: Prepare artifact
+        run: |
+          mkdir -p dist
+          cp ./make dist/make_ios_arm64
+          chmod +x dist/make_ios_arm64
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: make_ios_arm64
+          path: dist/make_ios_arm64
+          retention-days: 30
+          if-no-files-found: error
+          compression-level: 0
