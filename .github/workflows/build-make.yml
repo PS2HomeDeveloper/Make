@@ -353,7 +353,6 @@ jobs:
         run: |
           mkdir -p dist
           cp ./make dist/make_ios_arm64
-          cp ./make dist/make_ios_x86_64
           chmod +x dist/make_ios_arm64
 
       - name: Upload artifact
