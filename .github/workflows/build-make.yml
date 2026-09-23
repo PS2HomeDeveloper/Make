@@ -318,27 +318,39 @@ jobs:
           compression-level: 0
 
   # ============================================================
-  # iOS: arm64 (الأجهزة الحقيقية فقط)
+  # iOS: arm64 (الأجهزة الحقيقية) و x86_64 (محاكي iOS Simulator على Mac Intel)
   # ملاحظة: هذا بناء متقاطع فقط. تطبيقات المتجر لا يُسمح لها بتشغيل
   # ثنائي منفصل وقت التشغيل بسبب صرامة sandbox الخاص بـ iOS.
   # ============================================================
   ios:
-    name: ios-arm64
+    name: ios-${{ matrix.arch }}
     runs-on: macos-14
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            sdk: iphoneos
+            version_min_flag: "-miphoneos-version-min=14.0"
+            out_name: make_ios_arm64
+          - arch: x86_64
+            sdk: iphonesimulator
+            version_min_flag: "-mios-simulator-version-min=14.0"
+            out_name: make_ios_x86_64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure (cross-compile for iOS device)
+      - name: Configure (cross-compile for iOS)
         run: |
           chmod +x ./configure ./build-aux/*
-          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          IOS_AR="$(xcrun --sdk iphoneos -f ar)"
-          IOS_RANLIB="$(xcrun --sdk iphoneos -f ranlib)"
-          CC="clang -arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=14.0 -D__BEOS__=1"
+          IOS_SDK="$(xcrun --sdk ${{ matrix.sdk }} --show-sdk-path)"
+          IOS_AR="$(xcrun --sdk ${{ matrix.sdk }} -f ar)"
+          IOS_RANLIB="$(xcrun --sdk ${{ matrix.sdk }} -f ranlib)"
+          CC="clang -arch ${{ matrix.arch }} -isysroot $IOS_SDK ${{ matrix.version_min_flag }} -D__BEOS__=1"
           echo "CC value: $CC"
           ./configure \
-            --host=aarch64-apple-ios \
+            --host=${{ matrix.arch }}-apple-ios \
             $COMMON_CONFIGURE_FLAGS \
             CC="$CC" AR="$IOS_AR" RANLIB="$IOS_RANLIB" \
             CFLAGS="-O2"
@@ -352,14 +364,14 @@ jobs:
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp ./make dist/make_ios_arm64
-          chmod +x dist/make_ios_arm64
+          cp ./make "dist/${{ matrix.out_name }}"
+          chmod +x "dist/${{ matrix.out_name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: make_ios_arm64
-          path: dist/make_ios_arm64
+          name: ${{ matrix.out_name }}
+          path: dist/${{ matrix.out_name }}
           retention-days: 30
           if-no-files-found: error
           compression-level: 0
