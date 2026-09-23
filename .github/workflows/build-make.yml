@@ -267,10 +267,12 @@ jobs:
         include:
           - arch: arm64
             cc: "clang -arch arm64"
+            host: ""
             out_name: make_macos_arm64
             can_run: true
           - arch: x86_64
             cc: "clang -arch x86_64"
+            host: "x86_64-apple-darwin"
             out_name: make_macos_x86_64
             can_run: false
     steps:
@@ -280,7 +282,12 @@ jobs:
       - name: Configure
         run: |
           chmod +x ./configure ./build-aux/*
+          HOST_FLAG=""
+          if [ -n "${{ matrix.host }}" ]; then
+            HOST_FLAG="--host=${{ matrix.host }}"
+          fi
           ./configure \
+            $HOST_FLAG \
             $COMMON_CONFIGURE_FLAGS \
             CC="${{ matrix.cc }}" \
             CFLAGS="-O2"
@@ -328,7 +335,7 @@ jobs:
           IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
           IOS_AR="$(xcrun --sdk iphoneos -f ar)"
           IOS_RANLIB="$(xcrun --sdk iphoneos -f ranlib)"
-          CC="clang -arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=14.0"
+          CC="clang -arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=14.0 -D__BEOS__=1"
           echo "CC value: $CC"
           ./configure \
             --host=aarch64-apple-ios \
