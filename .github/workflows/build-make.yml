@@ -26,6 +26,7 @@ jobs:
             host: ""
             apt_pkg: ""
             out_name: make_linux_x86_64
+
           - arch: x86
             cc: "gcc -m32"
             cflags: "-m32 -O2"
@@ -33,6 +34,7 @@ jobs:
             host: ""
             apt_pkg: "gcc-multilib g++-multilib libc6-dev-i386"
             out_name: make_linux_x86
+
           - arch: arm64
             cc: "aarch64-linux-gnu-gcc"
             cflags: "-O2"
@@ -40,6 +42,7 @@ jobs:
             host: "aarch64-linux-gnu"
             apt_pkg: "gcc-aarch64-linux-gnu"
             out_name: make_linux_arm64
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,6 +62,7 @@ jobs:
           if [ -n "${{ matrix.host }}" ]; then
             HOST_FLAG="--host=${{ matrix.host }}"
           fi
+
           ./configure \
             $HOST_FLAG \
             $COMMON_CONFIGURE_FLAGS \
@@ -91,6 +95,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+
   # ============================================================
   # ويندوز: x86_64/x86 عبر mingw-w64 (gcc)، وarm64 عبر llvm-mingw (clang)
   # ============================================================
@@ -106,16 +111,19 @@ jobs:
             toolchain: mingw-gcc
             cc: x86_64-w64-mingw32-gcc
             out_name: make_windows_x86_64.exe
+
           - arch: x86
             host: i686-w64-mingw32
             toolchain: mingw-gcc
             cc: i686-w64-mingw32-gcc
             out_name: make_windows_x86.exe
+
           - arch: arm64
             host: aarch64-w64-mingw32
             toolchain: llvm-mingw
             cc: aarch64-w64-mingw32-clang
             out_name: make_windows_arm64.exe
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,16 +138,21 @@ jobs:
         if: matrix.toolchain == 'llvm-mingw'
         run: |
           URL="https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW_VERSION}/llvm-mingw-${LLVM_MINGW_VERSION}-ucrt-ubuntu-22.04-x86_64.tar.xz"
+
           curl -L -o llvm-mingw.tar.xz "$URL"
+
           sudo mkdir -p /opt/llvm-mingw
           sudo tar -xJf llvm-mingw.tar.xz -C /opt/llvm-mingw --strip-components=1
+
           echo "/opt/llvm-mingw/bin" >> "$GITHUB_PATH"
 
       - name: Configure (cross-compile for Windows)
         run: |
           chmod +x ./configure ./build-aux/*
+
           command -v "${{ matrix.cc }}"
           "${{ matrix.cc }}" --version
+
           ./configure \
             --host=${{ matrix.host }} \
             $COMMON_CONFIGURE_FLAGS \
@@ -168,6 +181,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+
   # ============================================================
   # أندرويد: arm64-v8a / armeabi-v7a / x86_64 / x86 عبر Android NDK
   # ============================================================
@@ -182,18 +196,22 @@ jobs:
             host: aarch64-linux-android
             clang_triplet: aarch64-linux-android21-clang
             out_name: make_android_arm64-v8a
+
           - arch: armeabi-v7a
             host: arm-linux-androideabi
             clang_triplet: armv7a-linux-androideabi21-clang
             out_name: make_android_armeabi-v7a
+
           - arch: x86_64
             host: x86_64-linux-android
             clang_triplet: x86_64-linux-android21-clang
             out_name: make_android_x86_64
+
           - arch: x86
             host: i686-linux-android
             clang_triplet: i686-linux-android21-clang
             out_name: make_android_x86
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -225,11 +243,15 @@ jobs:
           fi
 
           "$CC" --version
+
           chmod +x ./configure ./build-aux/*
+
           ./configure \
             --host=${{ matrix.host }} \
             $COMMON_CONFIGURE_FLAGS \
-            CC="$CC" AR="$AR" RANLIB="$RANLIB" \
+            CC="$CC" \
+            AR="$AR" \
+            RANLIB="$RANLIB" \
             CFLAGS="-O2"
 
       - name: Build
@@ -255,6 +277,7 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+
   # ============================================================
   # macOS: arm64 (Apple Silicon) و x86_64 (Intel)
   # ============================================================
@@ -270,11 +293,13 @@ jobs:
             host: ""
             out_name: make_macos_arm64
             can_run: true
+
           - arch: x86_64
             cc: "clang -arch x86_64"
             host: "x86_64-apple-darwin"
             out_name: make_macos_x86_64
             can_run: false
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -282,10 +307,12 @@ jobs:
       - name: Configure
         run: |
           chmod +x ./configure ./build-aux/*
+
           HOST_FLAG=""
           if [ -n "${{ matrix.host }}" ]; then
             HOST_FLAG="--host=${{ matrix.host }}"
           fi
+
           ./configure \
             $HOST_FLAG \
             $COMMON_CONFIGURE_FLAGS \
@@ -298,6 +325,7 @@ jobs:
       - name: Verify binary architecture
         run: |
           file ./make
+
           if [ "${{ matrix.can_run }}" = "true" ]; then
             ./make --version
           fi
@@ -317,49 +345,100 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+
   # ============================================================
-  # iOS: arm64 (الأجهزة الحقيقية فقط)
-  # ملاحظة: هذا بناء متقاطع فقط. تطبيقات المتجر لا يُسمح لها بتشغيل
-  # ثنائي منفصل وقت التشغيل بسبب صرامة sandbox الخاص بـ iOS.
+  # iOS:
+  # arm64    = أجهزة iPhone/iPad الحقيقية
+  # x86_64   = iOS Simulator على Intel
+  #
+  # كلاهما يتم بناؤه على macOS.
   # ============================================================
   ios:
-    name: ios-arm64
+    name: ios-${{ matrix.arch }}
     runs-on: macos-14
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+
+          # ------------------------------------------------------
+          # iOS Device
+          # ------------------------------------------------------
+          - arch: arm64
+            sdk: iphoneos
+            host: aarch64-apple-ios
+            cc_arch: arm64
+            min_version_flag: "-miphoneos-version-min=14.0"
+            out_name: make_ios_arm64
+            can_run: false
+
+          # ------------------------------------------------------
+          # iOS Simulator
+          # ------------------------------------------------------
+          - arch: x86_64
+            sdk: iphonesimulator
+            host: x86_64-apple-ios
+            cc_arch: x86_64
+            min_version_flag: "-mios-simulator-version-min=14.0"
+            out_name: make_ios_x86_64
+            can_run: false
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Configure (cross-compile for iOS device)
+      - name: Configure for iOS
         run: |
           chmod +x ./configure ./build-aux/*
-          IOS_SDK="$(xcrun --sdk iphoneos --show-sdk-path)"
-          IOS_AR="$(xcrun --sdk iphoneos -f ar)"
-          IOS_RANLIB="$(xcrun --sdk iphoneos -f ranlib)"
-          CC="clang -arch arm64 -isysroot $IOS_SDK -miphoneos-version-min=14.0 -D__BEOS__=1"
-          echo "CC value: $CC"
+
+          IOS_SDK="$(xcrun --sdk ${{ matrix.sdk }} --show-sdk-path)"
+          IOS_AR="$(xcrun --sdk ${{ matrix.sdk }} -f ar)"
+          IOS_RANLIB="$(xcrun --sdk ${{ matrix.sdk }} -f ranlib)"
+
+          CC="clang \
+            -arch ${{ matrix.cc_arch }} \
+            -isysroot $IOS_SDK \
+            ${{ matrix.min_version_flag }} \
+            -D__BEOS__=1"
+
+          echo "SDK: ${{ matrix.sdk }}"
+          echo "Architecture: ${{ matrix.arch }}"
+          echo "SDK path: $IOS_SDK"
+          echo "CC: $CC"
+
+          clang --version
+
           ./configure \
-            --host=aarch64-apple-ios \
+            --host=${{ matrix.host }} \
             $COMMON_CONFIGURE_FLAGS \
-            CC="$CC" AR="$IOS_AR" RANLIB="$IOS_RANLIB" \
+            CC="$CC" \
+            AR="$IOS_AR" \
+            RANLIB="$IOS_RANLIB" \
             CFLAGS="-O2"
 
       - name: Build
         run: make -j"$(sysctl -n hw.ncpu)"
 
       - name: Verify binary architecture
-        run: file ./make
+        run: |
+          echo "--- Binary information ---"
+          file ./make
+
+          echo "--- Mach-O information ---"
+          xcrun otool -hv ./make || true
 
       - name: Prepare artifact
         run: |
           mkdir -p dist
-          cp ./make dist/make_ios_arm64
-          chmod +x dist/make_ios_arm64
+          cp ./make "dist/${{ matrix.out_name }}"
+          chmod +x "dist/${{ matrix.out_name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: make_ios_arm64
-          path: dist/make_ios_arm64
+          name: ${{ matrix.out_name }}
+          path: dist/${{ matrix.out_name }}
           retention-days: 30
           if-no-files-found: error
           compression-level: 0
