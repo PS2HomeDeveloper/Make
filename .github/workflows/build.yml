@@ -1,0 +1,136 @@
+name: Build SDL2 Android ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Install build requirements
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build p7zip-full python3 git curl unzip
+
+      - name: Find latest stable SDL2 release
+        id: sdl
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          import re
+          import urllib.request
+
+          url = "https://api.github.com/repos/libsdl-org/SDL/releases?per_page=100"
+          request = urllib.request.Request(
+              url,
+              headers={"Accept": "application/vnd.github+json"}
+          )
+
+          with urllib.request.urlopen(request) as response:
+              releases = json.load(response)
+
+          pattern = re.compile(r"^release-(2\.\d+\.\d+)$")
+          versions = []
+
+          for release in releases:
+              if release.get("draft") or release.get("prerelease"):
+                  continue
+              match = pattern.fullmatch(release["tag_name"])
+              if match:
+                  version = tuple(map(int, match.group(1).split(".")))
+                  versions.append((version, release["tag_name"]))
+
+          if not versions:
+              raise SystemExit("No stable SDL2 release found")
+
+          tag = max(versions)[1]
+          print(f"SDL_TAG={tag}")
+          with open(__import__("os").environ["GITHUB_OUTPUT"], "a") as f:
+              f.write(f"tag={tag}\n")
+          PY
+
+      - name: Download official Android NDK
+        shell: bash
+        run: |
+          curl -fL --retry 3 \
+            https://dl.google.com/android/repository/android-ndk-r30-linux.zip \
+            -o "$RUNNER_TEMP/android-ndk.zip"
+
+          unzip -q "$RUNNER_TEMP/android-ndk.zip" -d "$RUNNER_TEMP"
+          echo "ANDROID_NDK_HOME=$RUNNER_TEMP/android-ndk-r30" >> "$GITHUB_ENV"
+
+      - name: Download SDL2 source
+        run: |
+          git clone --depth 1 \
+            --branch "${{ steps.sdl.outputs.tag }}" \
+            https://github.com/libsdl-org/SDL.git SDL2
+
+      - name: Configure SDL2 for Android ARM64
+        run: |
+          cmake -S SDL2 -B build \
+            -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-24 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$PWD/package/SDL2" \
+            -DCMAKE_INSTALL_LIBDIR=lib \
+            -DSDL_SHARED=ON \
+            -DSDL_STATIC=OFF \
+            -DSDL_TEST=OFF
+
+      - name: Build SDL2
+        run: |
+          cmake --build build --parallel 2
+          cmake --install build
+
+      - name: Package matching Java sources
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          JAVA_SRC="SDL2/android-project/app/src/main/java/org/libsdl/app"
+
+          test -d "$JAVA_SRC"
+          test -f package/SDL2/lib/libSDL2.so
+          test -f SDL2/include/SDL.h
+
+          mkdir -p package/SDL2/java/org/libsdl
+          cp -a "$JAVA_SRC" package/SDL2/java/org/libsdl/app
+
+          cp SDL2/LICENSE.txt package/SDL2/ 2>/dev/null || true
+
+          printf '%s\n' \
+            "SDL_TAG=${{ steps.sdl.outputs.tag }}" \
+            "ABI=arm64-v8a" \
+            "ANDROID_API=24" \
+            "NDK=r30" \
+            > package/SDL2/BUILD_INFO.txt
+
+          file package/SDL2/lib/libSDL2.so
+          llvm-readelf -h package/SDL2/lib/libSDL2.so \
+            2>/dev/null || \
+            "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-readelf" \
+            -h package/SDL2/lib/libSDL2.so
+
+      - name: Create maximum-compression 7z archive
+        run: |
+          7z a -t7z -mx=9 SDL2-Android-arm64-v8a.7z ./package/SDL2
+          7z t SDL2-Android-arm64-v8a.7z
+
+      - name: Upload downloadable archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: SDL2-Android-arm64-v8a
+          path: SDL2-Android-arm64-v8a.7z
+          if-no-files-found: error
+          retention-days: 30
